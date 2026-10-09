@@ -84,12 +84,12 @@ class auth_plugin_gate extends auth_plugin_base
         $info = $curl->get_info();
 
         // 4. Evaluasi Response SSO
+        $responseData = json_decode($response, true);
+
         if ($info['http_code'] != 200) {
-            $SESSION->loginerrormsg = 'Gagal memverifikasi token ke server SSO.';
+            $SESSION->loginerrormsg = $responseData['message'] ?? 'Gagal memverifikasi token ke server SSO.';
             redirect(new moodle_url('/login/index.php'));
         }
-
-        $responseData = json_decode($response, true);
 
         if (isset($responseData['success']) && $responseData['success'] == false) {
             $SESSION->loginerrormsg = $responseData['message'] ?? 'Akses ditolak oleh Gate SSO.';
