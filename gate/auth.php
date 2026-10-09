@@ -11,6 +11,31 @@ class auth_plugin_gate extends auth_plugin_base
         $this->authtype = 'gate';
     }
 
+    private function update_sso_login_status($historyId, $status)
+    {
+        global $CFG;
+
+        if (empty($historyId)) return;
+
+        $sso_url       = $CFG->sso_gate_url ?? '';
+        $app_key       = $CFG->sso_gate_app_key ?? '';
+        $client_secret = $CFG->sso_gate_secret ?? '';
+
+        if (empty($app_key) || empty($client_secret) || empty($sso_url)) return;
+
+        $curl = new curl();
+        $curl->setopt(array('CURLOPT_TIMEOUT' => 5));
+
+        $data = array(
+            'app_key'              => $app_key,
+            'client_secret'        => $client_secret,
+            'sso_login_history_id' => $historyId,
+            'status'               => $status
+        );
+
+        $curl->post(rtrim($sso_url, '/') . '/sso-update-login-status', $data);
+    }
+
     /**
      * Mencegat halaman login standar Moodle jika ada parameter ?token=
      */
@@ -73,6 +98,7 @@ class auth_plugin_gate extends auth_plugin_base
 
         // 5. Ambil dan normalisasi data User
         $userData = $responseData['data'];
+        $sso_login_history_id = $responseData['sso_login_history_id'] ?? null;
         $sso_username = core_text::strtolower($userData['username']);
 
         // --- Cekal Keuangan (Menggunakan API Cybercampus) ---
@@ -83,6 +109,7 @@ class auth_plugin_gate extends auth_plugin_base
         );
 
         if ($is_mahasiswa && $this->check_cekal_keuangan($sso_username)) {
+            $this->update_sso_login_status($sso_login_history_id, 'failed');
             $SESSION->loginerrormsg = 'Gagal Login: Akun Anda sedang ditangguhkan karena masalah administrasi keuangan (Cekal Keuangan). Silakan hubungi bagian keuangan.';
             redirect(new moodle_url('/login/index.php'));
         }
@@ -101,11 +128,13 @@ class auth_plugin_gate extends auth_plugin_base
         $moodle_user = $DB->get_record('user', array('username' => $sso_username, 'deleted' => 0, 'mnethostid' => $CFG->mnet_localhost_id));
 
         if (!$moodle_user) {
+            $this->update_sso_login_status($sso_login_history_id, 'failed');
             $SESSION->loginerrormsg = 'Akun Anda tidak memiliki akses. Hubungi admin helpdesk.';
             redirect(new moodle_url('/login/index.php'));
         }
 
         if (empty($userData['email_verified'])) {
+            $this->update_sso_login_status($sso_login_history_id, 'failed');
             $SESSION->loginerrormsg = 'Email SSO Anda belum terverifikasi.';
             redirect(new moodle_url('/login/index.php'));
         }
@@ -167,15 +196,15 @@ class auth_plugin_gate extends auth_plugin_base
     private function get_active_token()
     {
         global $CFG;
-        
+
         $urlAPI = $CFG->cybercampus_api_url ?? 'https://api.um-surabaya.ac.id/';
-        $userAPI = $CFG->cybercampus_api_user ?? 'ISI_USER_API_DISINI'; 
-        $keyAPI = $CFG->cybercampus_api_key ?? 'ISI_KEY_API_DISINI'; 
+        $userAPI = $CFG->cybercampus_api_user ?? 'ISI_USER_API_DISINI';
+        $keyAPI = $CFG->cybercampus_api_key ?? 'ISI_KEY_API_DISINI';
 
         // Pastikan URL diakhiri dengan slash
         $urlAPI = rtrim($urlAPI, '/') . '/';
         $url = $urlAPI . 'token/ambil-token-v2';
-        
+
         $data = [
             'user' => $userAPI,
             'key' => $keyAPI,
@@ -199,10 +228,10 @@ class auth_plugin_gate extends auth_plugin_base
     private function check_cekal_keuangan($username)
     {
         global $CFG;
-        
+
         $urlAPI = $CFG->cybercampus_api_url ?? 'https://api.um-surabaya.ac.id/';
         $urlAPI = rtrim($urlAPI, '/') . '/';
-        
+
         $endpoint = $CFG->cybercampus_api_endpoint_cekal ?? 'keuangan/dummy-cek-keuangan';
         // Hapus slash di awal endpoint jika ada
         $endpoint = ltrim($endpoint, '/');
