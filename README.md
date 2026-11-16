@@ -33,12 +33,12 @@ Tambahkan baris kode berikut ke dalam file `config.php` yang berada di direktori
 
 ```php
 // ==========================================
-// KONFIGURASI GATE SSO
+// KONFIGURASI GATE SSO (OAuth 2.0 + Single Logout)
 // ==========================================
 $CFG->sso_gate_url       = 'https://gate.um-surabaya.ac.id'; 
 $CFG->sso_gate_app_key   = 'ISI_APP_KEY_DISINI';
 $CFG->sso_gate_secret    = 'ISI_CLIENT_SECRET_DISINI';
-$CFG->sso_gate_scopes    = 'basic,email';
+$CFG->sso_gate_scopes    = 'basic,email,role';
 
 // ==========================================
 // KONFIGURASI API CEKAL KEUANGAN
@@ -76,86 +76,62 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
 1. Login sebagai Administrator.
 2. Navigasi ke **Site administration > Appearance > Additional HTML**.
 3. Pada kolom **Before BODY is closed**, salin dan tempel kode *script* di bawah ini.
-4. **Penting:** Pastikan untuk mengganti nilai `ISI_APP_KEY_DISINI` pada script dengan `APP_KEY` yang sebenarnya dari sistem Gate SSO.
-5. Simpan perubahan (*Save changes*).
+4. Simpan perubahan (*Save changes*).
 
-**Kode Script Tombol SSO (Untuk Moodle 5.2):**
+**Kode Script Tombol SSO & Collapse Form Manual (OAuth 2.0 + PKCE):**
 
 ```html
 <!-- ========================================== -->
-<!-- SCRIPT TOMBOL SSO -->
+<!-- SCRIPT TOMBOL GATE SSO (OAUTH 2.0 + COLLAPSE FORM MANUAL) -->
 <!-- ========================================== -->
 <script type="text/javascript">
     // <![CDATA[
     if (window.location.pathname.indexOf("/login/index.php") !== -1) {
         document.addEventListener("DOMContentLoaded", function () {
-            // --- 1. MEMBUAT TOMBOL SSO ---
+            var hasLoginError = document.querySelector("#loginerrormessage, .loginerrors, .alert-danger") !== null;
+
+            // --- 1. MEMBUAT TOMBOL SSO & TOGGLE FORM MANUAL ---
             var ssoDiv = document.createElement("div");
-            ssoDiv.className = "mb-4 pb-4 border-bottom text-center";
+            ssoDiv.className = "mb-3 text-center";
             ssoDiv.innerHTML =
-                '<div class="alert alert-info py-2 px-3 small mb-3 text-start">' +
-                '<i class="fa fa-info-circle mr-1"></i>' +
-                "<strong>Informasi:</strong> Mahasiswa dan Dosen bisa langsung login menggunakan <strong>Gate SSO</strong>." +
+                '<div class="alert alert-info py-2 px-3 small mb-3 text-start text-left" role="alert">' +
+                '<i class="fa fa-shield mr-1 me-1"></i>' +
+                "<strong>Informasi:</strong> Silakan masuk menggunakan akun <strong>Gate SSO UMSURA</strong> Anda untuk akses terintegrasi." +
                 "</div>" +
-                '<button type="button" onclick="loginWithSSO()" class="btn btn-primary w-100 rounded-pill">' +
-                '<i class="fa fa-sign-in mr-2"></i> Login dengan Gate SSO' +
-                "</button>";
+                '<button type="button" onclick="loginWithSSO()" class="btn btn-primary btn-lg w-100 rounded-pill fw-bold font-weight-bold shadow-sm">' +
+                '<i class="fa fa-sign-in mr-2 me-2"></i> Login dengan Gate SSO' +
+                "</button>" +
+                '<div class="mt-3">' +
+                '<button class="btn btn-link btn-sm text-muted text-decoration-none" type="button" data-bs-toggle="collapse" data-toggle="collapse" data-bs-target="#manualLoginFormCollapse" data-target="#manualLoginFormCollapse" aria-expanded="' + (hasLoginError ? "true" : "false") + '" aria-controls="manualLoginFormCollapse">' +
+                '<i class="fa fa-key mr-1 me-1"></i> Masuk dengan Username &amp; Password <i class="fa fa-angle-down ml-1 ms-1"></i>' +
+                "</button>" +
+                "</div>";
 
             var loginForm = document.querySelector("form#login");
 
             if (loginForm && loginForm.parentNode) {
                 loginForm.parentNode.insertBefore(ssoDiv, loginForm);
-            }
 
-            // --- 2. MEMBUAT ELEMEN BACKDROP LOADING ---
-            var backdrop = document.createElement("div");
-            backdrop.id = "sso-loading-backdrop";
-            backdrop.style.cssText = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.75); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; color: white; backdrop-filter: blur(3px);";
-            backdrop.innerHTML = '<i class="fa fa-circle-o-notch fa-spin fa-4x mb-3"></i>' + '<h4 id="sso-loading-title" class="text-white">Menunggu Autentikasi...</h4>' + '<p class="small text-light">Silakan selesaikan login di jendela popup SSO.</p>';
-            document.body.appendChild(backdrop);
+                // Bungkus form login manual agar tersembunyi (collapse) secara default
+                var collapseWrapper = document.createElement("div");
+                collapseWrapper.id = "manualLoginFormCollapse";
+                collapseWrapper.className = "collapse" + (hasLoginError ? " show" : "") + " mt-3 pt-3 border-top";
+                loginForm.parentNode.insertBefore(collapseWrapper, loginForm);
+                collapseWrapper.appendChild(loginForm);
+            }
         });
 
-        // --- 3. FUNGSI PEMBUKA POPUP & TRIGGER BACKDROP ---
+        // --- 2. FUNGSI REDIRECT KE ALUR OAUTH 2.0 + PKCE ---
         window.loginWithSSO = function () {
-            var SSO_URL = "https://" + "gate.um-surabaya.ac.id";
-            var SSO_APP_KEY = "ISI_APP_KEY_DISINI"; // Ganti dengan APP_KEY yang valid
-            var gateSSOUrl = SSO_URL + "/sso-authorize/" + SSO_APP_KEY;
-
-            var width = 500;
-            var height = 600;
-            var left = (window.screen.width - width) / 2;
-            var top = (window.screen.height - height) / 2;
-
-            var ssoWindow = window.open(gateSSOUrl, "SSOWindow", "width=" + width + ",height=" + height + ",top=" + top + ",left=" + left);
-            var backdrop = document.getElementById("sso-loading-backdrop");
-
-            if (!ssoWindow || ssoWindow.closed || typeof ssoWindow.closed == "undefined") {
-                alert("Jendela SSO diblokir oleh browser. Silakan izinkan popup untuk situs ini.");
-                return;
-            }
-
-            if (backdrop) backdrop.style.display = "flex";
-
-            var checkWindowClosed = setInterval(function () {
-                if (ssoWindow && ssoWindow.closed) {
-                    clearInterval(checkWindowClosed);
-                    if (backdrop) backdrop.style.display = "none";
-                }
-            }, 500);
+            window.location.href = "/login/index.php?auth_gate_sso=1";
         };
 
-        // --- 4. LISTENER PENERIMA TOKEN & REDIRECT ---
+        // --- 3. LISTENER FALLBACK PENERIMA TOKEN LEGACY ---
         window.addEventListener("message", function (event) {
             var gateOrigin = "https://" + "gate.um-surabaya.ac.id";
             if (event.origin !== gateOrigin) return;
 
             if (event.data && event.data.status === "success" && event.data.token) {
-                var title = document.getElementById("sso-loading-title");
-                if (title) {
-                    title.innerHTML = "Autentikasi Berhasil! Mengarahkan...";
-                    title.className = "text-success fw-bold";
-                }
-
                 window.location.href = "/login/index.php?token_sso=" + event.data.token;
             }
         });

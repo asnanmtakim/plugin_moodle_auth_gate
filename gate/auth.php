@@ -37,68 +37,161 @@ class auth_plugin_gate extends auth_plugin_base
     }
 
     /**
-     * Mencegat halaman login standar Moodle jika ada parameter ?token=
+     * Mencegat halaman login standar Moodle untuk:
+     * 1. Inisiasi OAuth 2.0 Authorization Code + PKCE (?auth_gate_sso=1)
+     * 2. Callback OAuth 2.0 (?code=...) maupun Fallback Token Legacy (?token_sso=... / ?token=...)
      */
     public function loginpage_hook()
     {
         global $CFG, $SESSION, $DB, $USER;
 
-        // 1. Ambil token dari URL
-        $token = optional_param('token_sso', '', PARAM_RAW);
-
+        $initOAuth  = optional_param('auth_gate_sso', 0, PARAM_INT);
+        $code       = optional_param('code', '', PARAM_RAW);
+        $state      = optional_param('state', '', PARAM_RAW);
+        $oauthError = optional_param('error', '', PARAM_RAW);
+        $errorDesc  = optional_param('error_description', '', PARAM_RAW);
+        $token      = optional_param('token_sso', '', PARAM_RAW);
         if (empty($token)) {
-            return;
+            $token = optional_param('token', '', PARAM_RAW);
         }
 
-        // 2. Ambil konfigurasi SSO dari variabel global $CFG (diset di config.php)
-        $sso_url       = $CFG->sso_gate_url ?? '';
+        $sso_url       = rtrim((string) ($CFG->sso_gate_url ?? ''), '/');
         $app_key       = $CFG->sso_gate_app_key ?? '';
         $client_secret = $CFG->sso_gate_secret ?? '';
-        $scopes        = $CFG->sso_gate_scopes ?? 'basic,email';
+        $scopes        = $CFG->sso_gate_scopes ?? 'basic,email,role';
+        $redirect_uri  = (new moodle_url('/login/index.php'))->out(false);
+
+        // 1. Inisiasi OAuth 2.0 Authorization Code Flow + PKCE (S256)
+        if ($initOAuth === 1) {
+            if (empty($app_key) || empty($client_secret) || empty($sso_url)) {
+                $SESSION->loginerrormsg = 'Konfigurasi kredensial Gate SSO belum diatur oleh Administrator.';
+                redirect(new moodle_url('/login/index.php'));
+            }
+
+            $oauthState    = 'moodle_gate_' . bin2hex(random_bytes(16));
+            $codeVerifier  = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+            $codeChallenge = rtrim(strtr(base64_encode(hash('sha256', $codeVerifier, true)), '+/', '-_'), '=');
+
+            $SESSION->auth_gate_oauth_state   = $oauthState;
+            $SESSION->auth_gate_code_verifier = $codeVerifier;
+
+            $params = array(
+                'response_type'         => 'code',
+                'client_id'             => $app_key,
+                'redirect_uri'          => $redirect_uri,
+                'scope'                 => 'openid ' . str_replace(',', ' ', $scopes),
+                'state'                 => $oauthState,
+                'code_challenge'        => $codeChallenge,
+                'code_challenge_method' => 'S256',
+            );
+
+            redirect(new moodle_url($sso_url . '/oauth/authorize', $params));
+        }
+
+        if (!empty($oauthError)) {
+            $SESSION->loginerrormsg = !empty($errorDesc) ? $errorDesc : 'Otorisasi Gate SSO dibatalkan atau gagal.';
+            redirect(new moodle_url('/login/index.php'));
+        }
+
+        if (empty($code) && empty($token)) {
+            return;
+        }
 
         if (empty($app_key) || empty($client_secret) || empty($sso_url)) {
             $SESSION->loginerrormsg = 'Konfigurasi kredensial Gate SSO belum diatur oleh Administrator.';
             redirect(new moodle_url('/login/index.php'));
         }
 
-        // 3. Proses cURL ke Server SSO
         $curl = new curl();
+        $userData             = null;
+        $sso_login_history_id = null;
+        $oauth_id_token       = null;
 
-        // Set Header Authorization
-        $options = array(
-            'CURLOPT_HTTPHEADER' => array(
-                'Authorization: Bearer ' . $token,
-                'Accept: application/json'
-            )
-        );
+        // 2A. Mode 1: Standar OAuth 2.0 Authorization Code + PKCE (Shield JWT Addon)
+        if (!empty($code)) {
+            $expectedState = $SESSION->auth_gate_oauth_state ?? '';
+            $codeVerifier  = $SESSION->auth_gate_code_verifier ?? '';
+            unset($SESSION->auth_gate_oauth_state, $SESSION->auth_gate_code_verifier);
 
-        // Data payload
-        $data = array(
-            'app_key'       => $app_key,
-            'client_secret' => $client_secret,
-            'scopes'        => $scopes
-        );
+            if (!empty($expectedState) && strpos($state, 'moodle_gate_') === 0 && !hash_equals((string) $expectedState, (string) $state)) {
+                $SESSION->loginerrormsg = 'State OAuth 2.0 tidak valid (CSRF protection).';
+                redirect(new moodle_url('/login/index.php'));
+            }
 
-        // Eksekusi request
-        $response = $curl->post($sso_url . '/sso-verify', $data, $options);
-        $info = $curl->get_info();
+            $tokenParams = array(
+                'grant_type'    => 'authorization_code',
+                'code'          => $code,
+                'client_id'     => $app_key,
+                'client_secret' => $client_secret,
+                'redirect_uri'  => $redirect_uri,
+            );
+            if (!empty($codeVerifier) && $state === $expectedState) {
+                $tokenParams['code_verifier'] = $codeVerifier;
+            }
 
-        // 4. Evaluasi Response SSO
-        $responseData = json_decode($response, true);
+            $tokenResponse = $curl->post($sso_url . '/oauth/token', $tokenParams);
+            $tokenInfo     = $curl->get_info();
+            $tokenData     = json_decode($tokenResponse, true);
 
-        if ($info['http_code'] != 200) {
-            $SESSION->loginerrormsg = $responseData['message'] ?? 'Gagal memverifikasi token ke server SSO.';
-            redirect(new moodle_url('/login/index.php'));
+            if (($tokenInfo['http_code'] ?? 0) != 200 || empty($tokenData['access_token'])) {
+                $SESSION->loginerrormsg = $tokenData['error_description'] ?? $tokenData['message'] ?? 'Gagal menukar kode otorisasi OAuth 2.0.';
+                redirect(new moodle_url('/login/index.php'));
+            }
+
+            $accessToken          = $tokenData['access_token'];
+            $oauth_id_token       = $tokenData['id_token'] ?? null;
+            $sso_login_history_id = $tokenData['sso_login_history_id'] ?? null;
+
+            // Ambil profil user dari /oauth/userinfo menggunakan Shield JWT Bearer Token
+            $userinfoOptions = array(
+                'CURLOPT_HTTPHEADER' => array(
+                    'Authorization: Bearer ' . $accessToken,
+                    'Accept: application/json',
+                ),
+            );
+            $userinfoResponse = $curl->get($sso_url . '/oauth/userinfo', array(), $userinfoOptions);
+            $userinfoInfo     = $curl->get_info();
+            $userinfoData     = json_decode($userinfoResponse, true);
+
+            if (($userinfoInfo['http_code'] ?? 0) != 200 || empty($userinfoData['data'])) {
+                $SESSION->loginerrormsg = $userinfoData['message'] ?? 'Gagal mengambil profil pengguna dari Gate SSO.';
+                redirect(new moodle_url('/login/index.php'));
+            }
+
+            $userData = $userinfoData['data'];
+        } else {
+            // 2B. Mode 2 (Fallback Legacy): Verifikasi Token Broker lama (/sso-verify)
+            $options = array(
+                'CURLOPT_HTTPHEADER' => array(
+                    'Authorization: Bearer ' . $token,
+                    'Accept: application/json'
+                )
+            );
+
+            $data = array(
+                'app_key'       => $app_key,
+                'client_secret' => $client_secret,
+                'scopes'        => $scopes
+            );
+
+            $response     = $curl->post($sso_url . '/sso-verify', $data, $options);
+            $info         = $curl->get_info();
+            $responseData = json_decode($response, true);
+
+            if (($info['http_code'] ?? 0) != 200) {
+                $SESSION->loginerrormsg = $responseData['message'] ?? 'Gagal memverifikasi token ke server SSO.';
+                redirect(new moodle_url('/login/index.php'));
+            }
+
+            if (isset($responseData['success']) && $responseData['success'] == false) {
+                $SESSION->loginerrormsg = $responseData['message'] ?? 'Akses ditolak oleh Gate SSO.';
+                redirect(new moodle_url('/login/index.php'));
+            }
+
+            $userData             = $responseData['data'];
+            $sso_login_history_id = $responseData['sso_login_history_id'] ?? null;
         }
 
-        if (isset($responseData['success']) && $responseData['success'] == false) {
-            $SESSION->loginerrormsg = $responseData['message'] ?? 'Akses ditolak oleh Gate SSO.';
-            redirect(new moodle_url('/login/index.php'));
-        }
-
-        // 5. Ambil dan normalisasi data User
-        $userData = $responseData['data'];
-        $sso_login_history_id = $responseData['sso_login_history_id'] ?? null;
         $sso_username = core_text::strtolower($userData['username']);
 
         // --- Cekal Keuangan (Menggunakan API Cybercampus) ---
@@ -117,6 +210,11 @@ class auth_plugin_gate extends auth_plugin_base
         // 6. Cegah konflik sesi jika user sudah login
         if (isloggedin() && !isguestuser()) {
             if ($USER->username === $sso_username) {
+                // Simpan metadata sesi SSO untuk Single Logout (SLO)
+                $SESSION->sso_user_id    = (int) ($userData['id'] ?? $userData['sub'] ?? 0);
+                $SESSION->sso_login_time = time();
+                $SESSION->sso_last_check = time();
+                $SESSION->oauth_id_token = $oauth_id_token;
                 // Akun sama, langsung masuk dashboard
                 redirect(new moodle_url('/my/'));
             }
@@ -157,11 +255,72 @@ class auth_plugin_gate extends auth_plugin_base
         // 9. Eksekusi Login Bypass
         complete_user_login($moodle_user);
 
+        // Simpan metadata sesi SSO untuk Single Logout (SLO)
+        $SESSION->sso_user_id    = (int) ($userData['id'] ?? $userData['sub'] ?? 0);
+        $SESSION->sso_login_time = time();
+        $SESSION->sso_last_check = time();
+        $SESSION->oauth_id_token = $oauth_id_token;
+
         // Terapkan batasan concurrent login Moodle
         \core\session\manager::apply_concurrent_login_limit($moodle_user->id, session_id());
 
         // 10. Arahkan ke Dashboard
         redirect(new moodle_url('/my/'));
+    }
+
+    /**
+     * Hook Single Logout (SLO) saat pengguna klik Logout di Moodle (/login/logout.php)
+     */
+    public function logoutpage_hook()
+    {
+        global $CFG, $SESSION, $redirect;
+
+        $ssoUserId = (int) ($SESSION->sso_user_id ?? 0);
+        $idToken   = $SESSION->oauth_id_token ?? null;
+
+        unset(
+            $SESSION->sso_user_id,
+            $SESSION->sso_login_time,
+            $SESSION->sso_last_check,
+            $SESSION->oauth_id_token
+        );
+
+        if ($ssoUserId <= 0) {
+            return;
+        }
+
+        $sso_url       = rtrim((string) ($CFG->sso_gate_url ?? ''), '/');
+        $app_key       = $CFG->sso_gate_app_key ?? '';
+        $client_secret = $CFG->sso_gate_secret ?? '';
+
+        if (empty($sso_url) || empty($app_key)) {
+            return;
+        }
+
+        // Back-Channel Logout ke Gate SSO (/sso-logout)
+        try {
+            $curl = new curl();
+            $curl->setopt(array('CURLOPT_TIMEOUT' => 3));
+            $curl->post($sso_url . '/sso-logout', array(
+                'app_key'       => $app_key,
+                'client_secret' => $client_secret,
+                'sso_user_id'   => $ssoUserId,
+            ));
+        } catch (\Throwable $e) {
+            // Abaikan error jaringan pada back-channel
+        }
+
+        // Front-Channel Redirect ke /oauth/logout agar cookie sesi di Gate SSO juga terhapus
+        $loginUrl = (new moodle_url('/login/index.php'))->out(false);
+        $params   = array(
+            'client_id'                => $app_key,
+            'post_logout_redirect_uri' => $loginUrl,
+        );
+        if (!empty($idToken)) {
+            $params['id_token_hint'] = $idToken;
+        }
+
+        $redirect = $sso_url . '/oauth/logout?' . http_build_query($params);
     }
 
     /**
@@ -213,7 +372,8 @@ class auth_plugin_gate extends auth_plugin_base
         $result = $this->perform_api_request('POST', $url, $data);
 
         if ($result !== "Unauthorized") {
-            return is_array($result) && isset($result['token']) ? $result['token'] : $result;
+            $rawToken = is_array($result) && isset($result['token']) ? $result['token'] : $result;
+            return is_string($rawToken) ? trim($rawToken, " \t\n\r\0\x0B\"'") : $rawToken;
         }
 
         return null;
