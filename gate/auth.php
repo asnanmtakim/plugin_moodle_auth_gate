@@ -289,9 +289,17 @@ class auth_plugin_gate extends auth_plugin_base
         $update_data->id = $moodle_user->id;
         $update_data->email = $userData['email_verified'];
 
-        // firstname ambil dari fullname penuh, lastname ambil dari username
-        $update_data->firstname = $userData['fullname'];
-        $update_data->lastname  = $sso_username;
+        // Atur format pemetaan nama (default: 'fullname_username', opsi: 'split')
+        $nameFormat = (string) ($CFG->sso_gate_name_format ?? 'fullname_username');
+        if ($nameFormat === 'split') {
+            $nameParts = explode(' ', trim((string) ($userData['fullname'] ?? '')), 2);
+            $update_data->firstname = $nameParts[0] !== '' ? $nameParts[0] : $sso_username;
+            $update_data->lastname  = (isset($nameParts[1]) && $nameParts[1] !== '') ? $nameParts[1] : $update_data->firstname;
+        } else {
+            // firstname ambil dari fullname penuh, lastname ambil dari username
+            $update_data->firstname = $userData['fullname'];
+            $update_data->lastname  = $sso_username;
+        }
 
         // Simpan pembaruan ke DB
         $DB->update_record('user', $update_data);

@@ -40,6 +40,7 @@ $CFG->sso_gate_url       = 'https://gate.um-surabaya.ac.id';
 $CFG->sso_gate_app_key   = 'ISI_APP_KEY_DISINI';
 $CFG->sso_gate_secret    = 'ISI_CLIENT_SECRET_DISINI';
 $CFG->sso_gate_scopes    = 'basic,email,role';
+// $CFG->sso_gate_name_format = 'fullname_username'; // Opsional: 'fullname_username' (default) atau 'split' (pecah nama depan & belakang)
 
 // ==========================================
 // KONFIGURASI OPSIONAL: API CEKAL KEUANGAN CYBERCAMPUS
@@ -90,7 +91,7 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
 <script type="text/javascript">
     // <![CDATA[
     if (window.location.pathname.indexOf("/login/index.php") !== -1) {
-        document.addEventListener("DOMContentLoaded", function () {
+        function initGateSSOLoginUI() {
             var errorEl = document.querySelector("#loginerrormessage, .loginerrors, .alert-danger");
             var isSSOError = errorEl && errorEl.textContent && errorEl.textContent.indexOf("Gate SSO") !== -1;
             var hasManualLoginError = errorEl !== null && !isSSOError;
@@ -103,7 +104,7 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
                 '<i class="fa fa-shield mr-1 me-1"></i>' +
                 "<strong>Informasi:</strong> Silakan masuk menggunakan akun <strong>Gate SSO UMSURA</strong> Anda untuk akses terintegrasi." +
                 "</div>" +
-                '<button type="button" onclick="loginWithSSO()" class="btn btn-primary btn-lg w-100 rounded-pill fw-bold font-weight-bold shadow-sm">' +
+                '<button id="btn-sso-login" type="button" onclick="loginWithSSO()" class="btn btn-primary btn-lg w-100 rounded-pill fw-bold font-weight-bold shadow-sm">' +
                 '<i class="fa fa-sign-in mr-2 me-2"></i> Login dengan Gate SSO' +
                 "</button>" +
                 '<div class="mt-3">' +
@@ -114,7 +115,7 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
 
             var loginForm = document.querySelector("form#login");
 
-            if (loginForm && loginForm.parentNode) {
+            if (loginForm && loginForm.parentNode && !document.getElementById("manualLoginFormCollapse")) {
                 loginForm.parentNode.insertBefore(ssoDiv, loginForm);
 
                 // Bungkus form login manual agar tersembunyi (collapse) secara default
@@ -124,15 +125,38 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
                 loginForm.parentNode.insertBefore(collapseWrapper, loginForm);
                 collapseWrapper.appendChild(loginForm);
             }
+        }
+
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", initGateSSOLoginUI);
+        } else {
+            initGateSSOLoginUI();
+        }
+
+        window.addEventListener("pageshow", function () {
+            var btn = document.getElementById("btn-sso-login");
+            if (btn && btn.dataset.originalHtml) {
+                btn.disabled = false;
+                btn.innerHTML = btn.dataset.originalHtml;
+            }
         });
 
         // --- 2. FUNGSI REDIRECT KE ALUR OAUTH 2.0 + PKCE ---
         window.loginWithSSO = function () {
+            var btn = document.getElementById("btn-sso-login");
+            if (btn) {
+                if (!btn.dataset.originalHtml) {
+                    btn.dataset.originalHtml = btn.innerHTML;
+                }
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa fa-circle-o-notch fa-spin mr-2 me-2"></i> Mengarahkan ke Gate SSO...';
+            }
             window.location.href = "/login/index.php?auth_gate_sso=1";
         };
 
         // --- 3. LISTENER FALLBACK PENERIMA TOKEN LEGACY ---
         window.addEventListener("message", function (event) {
+            // Penting: pisahkan "https://" agar tidak diubah menjadi tag <a> oleh filter urltolink Moodle
             var gateOrigin = "https://" + "gate.um-surabaya.ac.id";
             if (event.origin !== gateOrigin) return;
 
