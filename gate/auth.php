@@ -23,7 +23,7 @@ class auth_plugin_gate extends auth_plugin_base
 
         if (empty($app_key) || empty($client_secret) || empty($sso_url)) return;
 
-        $curl = new curl();
+        $curl = new curl(array('ignoresecurity' => true));
         $curl->setopt(array('CURLOPT_TIMEOUT' => 5));
 
         $data = array(
@@ -64,7 +64,7 @@ class auth_plugin_gate extends auth_plugin_base
         // 1. Inisiasi OAuth 2.0 Authorization Code Flow + PKCE (S256)
         if ($initOAuth === 1) {
             if (empty($app_key) || empty($client_secret) || empty($sso_url)) {
-                $SESSION->loginerrormsg = 'Konfigurasi kredensial Gate SSO belum diatur oleh Administrator.';
+                $SESSION->loginerrormsg = 'Gate SSO: Konfigurasi kredensial belum diatur oleh Administrator.';
                 redirect(new moodle_url('/login/index.php'));
             }
 
@@ -85,11 +85,34 @@ class auth_plugin_gate extends auth_plugin_base
                 'code_challenge_method' => 'S256',
             );
 
+            // Preflight check agar jika terjadi error konfigurasi di Gate SSO (misal HTTP 400 JSON),
+            // pesan error ditampilkan rapi di halaman depan login Moodle, bukan raw JSON di browser.
+            try {
+                $preCurl = new curl(array('ignoresecurity' => true));
+                $preCurl->setopt(array(
+                    'CURLOPT_TIMEOUT'        => 4,
+                    'CURLOPT_FOLLOWLOCATION' => false,
+                ));
+                $preResponse = $preCurl->get($sso_url . '/oauth/authorize', $params);
+                $preInfo     = $preCurl->get_info();
+                $preCode     = (int) ($preInfo['http_code'] ?? 0);
+
+                if ($preCode >= 400) {
+                    $preData = json_decode((string) $preResponse, true);
+                    $errMsg  = $preData['error_description'] ?? $preData['message'] ?? 'Layanan Gate SSO menolak permintaan otorisasi.';
+                    $SESSION->loginerrormsg = 'Gate SSO: ' . $errMsg;
+                    redirect(new moodle_url('/login/index.php'));
+                }
+            } catch (\Throwable $e) {
+                // Jika preflight timeout, lanjutkan redirect normal ke Gate SSO
+            }
+
             redirect(new moodle_url($sso_url . '/oauth/authorize', $params));
         }
 
         if (!empty($oauthError)) {
-            $SESSION->loginerrormsg = !empty($errorDesc) ? $errorDesc : 'Otorisasi Gate SSO dibatalkan atau gagal.';
+            $errText = !empty($errorDesc) ? $errorDesc : 'Otorisasi Gate SSO dibatalkan atau gagal.';
+            $SESSION->loginerrormsg = (stripos($errText, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errText;
             redirect(new moodle_url('/login/index.php'));
         }
 
@@ -102,7 +125,7 @@ class auth_plugin_gate extends auth_plugin_base
             redirect(new moodle_url('/login/index.php'));
         }
 
-        $curl = new curl();
+        $curl = new curl(array('ignoresecurity' => true));
         $userData             = null;
         $sso_login_history_id = null;
         $oauth_id_token       = null;
@@ -299,7 +322,7 @@ class auth_plugin_gate extends auth_plugin_base
 
         // Back-Channel Logout ke Gate SSO (/sso-logout)
         try {
-            $curl = new curl();
+            $curl = new curl(array('ignoresecurity' => true));
             $curl->setopt(array('CURLOPT_TIMEOUT' => 3));
             $curl->post($sso_url . '/sso-logout', array(
                 'app_key'       => $app_key,
@@ -328,7 +351,7 @@ class auth_plugin_gate extends auth_plugin_base
      */
     private function perform_api_request($method, $url, $data = null)
     {
-        $curl = new curl();
+        $curl = new curl(array('ignoresecurity' => true));
 
         if ($method === 'POST') {
             $response = $curl->post($url, $data);

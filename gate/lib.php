@@ -49,7 +49,7 @@ function auth_gate_check_sso_session(): void
 
     try {
         require_once($CFG->libdir . '/filelib.php');
-        $curl = new curl();
+        $curl = new curl(array('ignoresecurity' => true));
         $curl->setopt(array('CURLOPT_TIMEOUT' => 3));
 
         $response = $curl->post($sso_url . '/sso-check-session', array(

@@ -88,7 +88,9 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
     // <![CDATA[
     if (window.location.pathname.indexOf("/login/index.php") !== -1) {
         document.addEventListener("DOMContentLoaded", function () {
-            var hasLoginError = document.querySelector("#loginerrormessage, .loginerrors, .alert-danger") !== null;
+            var errorEl = document.querySelector("#loginerrormessage, .loginerrors, .alert-danger");
+            var isSSOError = errorEl && errorEl.textContent && errorEl.textContent.indexOf("Gate SSO") !== -1;
+            var hasManualLoginError = errorEl !== null && !isSSOError;
 
             // --- 1. MEMBUAT TOMBOL SSO & TOGGLE FORM MANUAL ---
             var ssoDiv = document.createElement("div");
@@ -102,7 +104,7 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
                 '<i class="fa fa-sign-in mr-2 me-2"></i> Login dengan Gate SSO' +
                 "</button>" +
                 '<div class="mt-3">' +
-                '<button class="btn btn-link btn-sm text-muted text-decoration-none" type="button" data-bs-toggle="collapse" data-toggle="collapse" data-bs-target="#manualLoginFormCollapse" data-target="#manualLoginFormCollapse" aria-expanded="' + (hasLoginError ? "true" : "false") + '" aria-controls="manualLoginFormCollapse">' +
+                '<button class="btn btn-link btn-sm text-muted text-decoration-none" type="button" data-bs-toggle="collapse" data-toggle="collapse" data-bs-target="#manualLoginFormCollapse" data-target="#manualLoginFormCollapse" aria-expanded="' + (hasManualLoginError ? "true" : "false") + '" aria-controls="manualLoginFormCollapse">' +
                 '<i class="fa fa-key mr-1 me-1"></i> Masuk dengan Username &amp; Password <i class="fa fa-angle-down ml-1 ms-1"></i>' +
                 "</button>" +
                 "</div>";
@@ -115,7 +117,7 @@ Agar pengguna dapat dengan mudah menemukan opsi login SSO, Anda perlu menambahka
                 // Bungkus form login manual agar tersembunyi (collapse) secara default
                 var collapseWrapper = document.createElement("div");
                 collapseWrapper.id = "manualLoginFormCollapse";
-                collapseWrapper.className = "collapse" + (hasLoginError ? " show" : "") + " mt-3 pt-3 border-top";
+                collapseWrapper.className = "collapse" + (hasManualLoginError ? " show" : "") + " mt-3 pt-3 border-top";
                 loginForm.parentNode.insertBefore(collapseWrapper, loginForm);
                 collapseWrapper.appendChild(loginForm);
             }
