@@ -28,12 +28,13 @@ Berdasarkan struktur komponen Moodle (`auth_gate`), nama direktori plugin harus 
 
 ## 4. Konfigurasi Kredensial SSO (via config.php)
 
-Plugin ini dirancang untuk membaca kredensial SSO dan API secara langsung dari *environment variable* global Moodle (`$CFG`).
+Plugin ini bersifat **general** dan dapat digunakan di semua instalasi Moodle (baik untuk E-Learning maupun Moodle non-E-Learning seperti pelatihan, sertifikasi, uji kompetensi, dll). Konfigurasi dibaca langsung dari variabel global Moodle (`$CFG`).
+
 Tambahkan baris kode berikut ke dalam file `config.php` yang berada di direktori root Moodle Anda:
 
 ```php
 // ==========================================
-// KONFIGURASI GATE SSO (OAuth 2.0 + Single Logout)
+// KONFIGURASI WAJIB: GATE SSO (OAuth 2.0 + Single Logout)
 // ==========================================
 $CFG->sso_gate_url       = 'https://gate.um-surabaya.ac.id'; 
 $CFG->sso_gate_app_key   = 'ISI_APP_KEY_DISINI';
@@ -41,21 +42,23 @@ $CFG->sso_gate_secret    = 'ISI_CLIENT_SECRET_DISINI';
 $CFG->sso_gate_scopes    = 'basic,email,role';
 
 // ==========================================
-// KONFIGURASI API CEKAL KEUANGAN
+// KONFIGURASI OPSIONAL: API CEKAL KEUANGAN CYBERCAMPUS
+// (Biarkan false atau hapus blok ini untuk Moodle non-E-Learning)
 // ==========================================
+$CFG->sso_gate_enable_cekal          = false; // Ubah ke true untuk mengaktifkan cek cekal keuangan mahasiswa
 $CFG->cybercampus_api_url            = 'https://api.um-surabaya.ac.id/';
 $CFG->cybercampus_api_user           = 'ISI_USER_API_DISINI';
 $CFG->cybercampus_api_key            = 'ISI_KEY_API_DISINI';
 $CFG->cybercampus_api_endpoint_cekal = 'keuangan/status-cekal'; // Ganti dengan path aslinya jika sudah siap
 ```
 
-## 5. Menyesuaikan Response API Cekal Keuangan
+> **Catatan:** Secara bawaan (`default`), fitur cekal keuangan bernilai **nonaktif (`false`)** apabila `$CFG->sso_gate_enable_cekal` tidak didefinisikan atau diisi `false` di `config.php`, sehingga untuk Moodle selain E-Learning Anda tidak perlu mengisi kredensial API Cybercampus.
 
-Plugin ini dilengkapi dengan fitur pengecekan status keuangan sebelum auto-login Moodle dieksekusi (khusus untuk user dengan *group* `mahasiswa`). Semua pengaturan URL dan *credentials* sudah diatur di `config.php`.
+## 5. Mengaktifkan & Menyesuaikan Response API Cekal Keuangan (Opsional)
 
-Ketika API Cybercampus untuk sistem Cekal Keuangan sudah sepenuhnya siap, Anda mungkin hanya perlu menyesuaikan pembacaan *response* JSON (jika format balikan/key dari server berbeda dari standar). 
+Jika `$CFG->sso_gate_enable_cekal = true;` diaktifkan pada `config.php`, plugin akan mengecek status keuangan mahasiswa melalui API Cybercampus sebelum auto-login Moodle dieksekusi (khusus untuk user dengan *group* `mahasiswa`).
 
-Pada file `[ROOT_MOODLE]/auth/gate/auth.php`, tepat di bagian bawah method `check_cekal_keuangan`, terdapat blok kode:
+Apabila format balikan JSON dari API Cybercampus berbeda dari standar, Anda dapat menyesuaikan pengecekan *response* pada file `[ROOT_MOODLE]/auth/gate/auth.php`, tepat di bagian bawah method `check_cekal_keuangan`:
 ```php
 // Evaluasi respon API sesuai struktur JSON balikan
 if (is_array($result)) {

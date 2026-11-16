@@ -85,7 +85,7 @@ class auth_plugin_gate extends auth_plugin_base
                 'code_challenge_method' => 'S256',
             );
 
-            // Preflight check agar jika terjadi error konfigurasi di Gate SSO (misal HTTP 400 JSON),
+            // Preflight check agar jika terjadi error konfigurasi di Gate SSO (misal HTTP 400 JSON atau 302 ?error=...),
             // pesan error ditampilkan rapi di halaman depan login Moodle, bukan raw JSON di browser.
             try {
                 $preCurl = new curl(array('ignoresecurity' => true));
@@ -99,9 +99,27 @@ class auth_plugin_gate extends auth_plugin_base
 
                 if ($preCode >= 400) {
                     $preData = json_decode((string) $preResponse, true);
-                    $errMsg  = $preData['error_description'] ?? $preData['message'] ?? 'Layanan Gate SSO menolak permintaan otorisasi.';
-                    $SESSION->loginerrormsg = 'Gate SSO: ' . $errMsg;
+                    $errMsg  = $preData['error_description'] ?? $preData['message'] ?? ('Layanan Gate SSO menolak permintaan otorisasi (HTTP ' . $preCode . ').');
+                    $SESSION->loginerrormsg = (stripos($errMsg, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errMsg;
                     redirect(new moodle_url('/login/index.php'));
+                }
+
+                if ($preCode >= 300 && $preCode < 400) {
+                    $headers  = array_change_key_case((array) $preCurl->getResponse(), CASE_LOWER);
+                    $location = is_array($headers['location'] ?? null)
+                        ? (string) end($headers['location'])
+                        : (string) ($headers['location'] ?? '');
+                    if ($location !== '') {
+                        $queryStr = (string) parse_url($location, PHP_URL_QUERY);
+                        if ($queryStr !== '') {
+                            parse_str($queryStr, $locQuery);
+                            if (!empty($locQuery['error'])) {
+                                $errMsg = (string) ($locQuery['error_description'] ?? $locQuery['error']);
+                                $SESSION->loginerrormsg = (stripos($errMsg, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errMsg;
+                                redirect(new moodle_url('/login/index.php'));
+                            }
+                        }
+                    }
                 }
             } catch (\Throwable $e) {
                 // Jika preflight timeout, lanjutkan redirect normal ke Gate SSO
@@ -121,7 +139,7 @@ class auth_plugin_gate extends auth_plugin_base
         }
 
         if (empty($app_key) || empty($client_secret) || empty($sso_url)) {
-            $SESSION->loginerrormsg = 'Konfigurasi kredensial Gate SSO belum diatur oleh Administrator.';
+            $SESSION->loginerrormsg = 'Gate SSO: Konfigurasi kredensial belum diatur oleh Administrator.';
             redirect(new moodle_url('/login/index.php'));
         }
 
@@ -137,7 +155,7 @@ class auth_plugin_gate extends auth_plugin_base
             unset($SESSION->auth_gate_oauth_state, $SESSION->auth_gate_code_verifier);
 
             if (!empty($expectedState) && strpos($state, 'moodle_gate_') === 0 && !hash_equals((string) $expectedState, (string) $state)) {
-                $SESSION->loginerrormsg = 'State OAuth 2.0 tidak valid (CSRF protection).';
+                $SESSION->loginerrormsg = 'Gate SSO: State OAuth 2.0 tidak valid (CSRF protection).';
                 redirect(new moodle_url('/login/index.php'));
             }
 
@@ -157,7 +175,8 @@ class auth_plugin_gate extends auth_plugin_base
             $tokenData     = json_decode($tokenResponse, true);
 
             if (($tokenInfo['http_code'] ?? 0) != 200 || empty($tokenData['access_token'])) {
-                $SESSION->loginerrormsg = $tokenData['error_description'] ?? $tokenData['message'] ?? 'Gagal menukar kode otorisasi OAuth 2.0.';
+                $errMsg = $tokenData['error_description'] ?? $tokenData['message'] ?? 'Gagal menukar kode otorisasi OAuth 2.0.';
+                $SESSION->loginerrormsg = (stripos($errMsg, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errMsg;
                 redirect(new moodle_url('/login/index.php'));
             }
 
@@ -177,7 +196,8 @@ class auth_plugin_gate extends auth_plugin_base
             $userinfoData     = json_decode($userinfoResponse, true);
 
             if (($userinfoInfo['http_code'] ?? 0) != 200 || empty($userinfoData['data'])) {
-                $SESSION->loginerrormsg = $userinfoData['message'] ?? 'Gagal mengambil profil pengguna dari Gate SSO.';
+                $errMsg = $userinfoData['message'] ?? 'Gagal mengambil profil pengguna dari Gate SSO.';
+                $SESSION->loginerrormsg = (stripos($errMsg, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errMsg;
                 redirect(new moodle_url('/login/index.php'));
             }
 
@@ -202,12 +222,14 @@ class auth_plugin_gate extends auth_plugin_base
             $responseData = json_decode($response, true);
 
             if (($info['http_code'] ?? 0) != 200) {
-                $SESSION->loginerrormsg = $responseData['message'] ?? 'Gagal memverifikasi token ke server SSO.';
+                $errMsg = $responseData['message'] ?? 'Gagal memverifikasi token ke server SSO.';
+                $SESSION->loginerrormsg = (stripos($errMsg, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errMsg;
                 redirect(new moodle_url('/login/index.php'));
             }
 
             if (isset($responseData['success']) && $responseData['success'] == false) {
-                $SESSION->loginerrormsg = $responseData['message'] ?? 'Akses ditolak oleh Gate SSO.';
+                $errMsg = $responseData['message'] ?? 'Akses ditolak oleh Gate SSO.';
+                $SESSION->loginerrormsg = (stripos($errMsg, 'Gate SSO') === false ? 'Gate SSO: ' : '') . $errMsg;
                 redirect(new moodle_url('/login/index.php'));
             }
 
@@ -217,17 +239,19 @@ class auth_plugin_gate extends auth_plugin_base
 
         $sso_username = core_text::strtolower($userData['username']);
 
-        // --- Cekal Keuangan (Menggunakan API Cybercampus) ---
-        // Pengecekan keuangan hanya diberlakukan jika user adalah mahasiswa
-        $is_mahasiswa = isset($userData['groups']) && (
-            (is_array($userData['groups']) && in_array('mahasiswa', $userData['groups'])) ||
-            ($userData['groups'] === 'mahasiswa')
-        );
+        // --- Cekal Keuangan (Opsional - Menggunakan API Cybercampus) ---
+        // Aktif hanya jika $CFG->sso_gate_enable_cekal = true di config.php dan user tergabung di group mahasiswa
+        if ($this->is_cekal_enabled()) {
+            $is_mahasiswa = isset($userData['groups']) && (
+                (is_array($userData['groups']) && in_array('mahasiswa', $userData['groups'])) ||
+                ($userData['groups'] === 'mahasiswa')
+            );
 
-        if ($is_mahasiswa && $this->check_cekal_keuangan($sso_username)) {
-            $this->update_sso_login_status($sso_login_history_id, 'failed');
-            $SESSION->loginerrormsg = 'Gagal Login: Akun Anda sedang ditangguhkan karena masalah administrasi keuangan (Cekal Keuangan). Silakan hubungi bagian keuangan.';
-            redirect(new moodle_url('/login/index.php'));
+            if ($is_mahasiswa && $this->check_cekal_keuangan($sso_username)) {
+                $this->update_sso_login_status($sso_login_history_id, 'failed');
+                $SESSION->loginerrormsg = 'Gate SSO: Akun Anda sedang ditangguhkan karena masalah administrasi keuangan (Cekal Keuangan). Silakan hubungi bagian keuangan.';
+                redirect(new moodle_url('/login/index.php'));
+            }
         }
 
         // 6. Cegah konflik sesi jika user sudah login
@@ -250,13 +274,13 @@ class auth_plugin_gate extends auth_plugin_base
 
         if (!$moodle_user) {
             $this->update_sso_login_status($sso_login_history_id, 'failed');
-            $SESSION->loginerrormsg = 'Akun Anda tidak memiliki akses. Hubungi admin helpdesk.';
+            $SESSION->loginerrormsg = 'Gate SSO: Akun Anda belum terdaftar atau tidak memiliki akses pada sistem Moodle ini. Silakan hubungi admin helpdesk.';
             redirect(new moodle_url('/login/index.php'));
         }
 
         if (empty($userData['email_verified'])) {
             $this->update_sso_login_status($sso_login_history_id, 'failed');
-            $SESSION->loginerrormsg = 'Email SSO Anda belum terverifikasi.';
+            $SESSION->loginerrormsg = 'Gate SSO: Email SSO Anda belum terverifikasi.';
             redirect(new moodle_url('/login/index.php'));
         }
 
@@ -403,16 +427,41 @@ class auth_plugin_gate extends auth_plugin_base
     }
 
     /**
-     * Memeriksa status cekal keuangan ke API Cybercampus
-     * 
+     * Mengecek apakah fitur validasi Cekal Keuangan Cybercampus diaktifkan melalui config.php.
+     * Default: false (nonaktif), sehingga plugin bersifat general untuk semua site Moodle.
+     */
+    private function is_cekal_enabled(): bool
+    {
+        global $CFG;
+
+        return !empty($CFG->sso_gate_enable_cekal);
+    }
+
+    /**
+     * Memeriksa status cekal keuangan ke API Cybercampus (opsional).
+     *
      * @param string $username Username/NIM yang akan dicek
-     * @return bool True jika dicekal, False jika aman
+     * @return bool True jika dicekal, False jika aman atau fitur cekal dinonaktifkan
      */
     private function check_cekal_keuangan($username)
     {
         global $CFG;
 
-        $urlAPI = $CFG->cybercampus_api_url ?? 'https://api.um-surabaya.ac.id/';
+        if (!$this->is_cekal_enabled()) {
+            return false;
+        }
+
+        $urlAPI  = trim((string) ($CFG->cybercampus_api_url ?? ''));
+        $userAPI = trim((string) ($CFG->cybercampus_api_user ?? ''));
+        $keyAPI  = trim((string) ($CFG->cybercampus_api_key ?? ''));
+
+        if (
+            $urlAPI === '' || $userAPI === '' || $keyAPI === ''
+            || $userAPI === 'ISI_USER_API_DISINI' || $keyAPI === 'ISI_KEY_API_DISINI'
+        ) {
+            return false;
+        }
+
         $urlAPI = rtrim($urlAPI, '/') . '/';
 
         $endpoint = $CFG->cybercampus_api_endpoint_cekal ?? 'keuangan/dummy-cek-keuangan';
