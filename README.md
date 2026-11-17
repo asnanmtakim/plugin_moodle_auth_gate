@@ -53,7 +53,9 @@ $CFG->cybercampus_api_key            = 'ISI_KEY_API_DISINI';
 $CFG->cybercampus_api_endpoint_cekal = 'keuangan/status-cekal'; // Ganti dengan path aslinya jika sudah siap
 ```
 
-> **Catatan:** Secara bawaan (`default`), fitur cekal keuangan bernilai **nonaktif (`false`)** apabila `$CFG->sso_gate_enable_cekal` tidak didefinisikan atau diisi `false` di `config.php`, sehingga untuk Moodle selain E-Learning Anda tidak perlu mengisi kredensial API Cybercampus.
+> **Catatan:**
+> - Secara bawaan (`default`), fitur cekal keuangan bernilai **nonaktif (`false`)** apabila `$CFG->sso_gate_enable_cekal` tidak didefinisikan atau diisi `false` di `config.php`, sehingga untuk Moodle selain E-Learning Anda tidak perlu mengisi kredensial API Cybercampus.
+> - Sejak **v2.3**, plugin bersifat **External Auth / Zero Local Password** (`is_internal() = false`, `prevent_local_passwords() = true`) sehingga user dengan `auth = 'gate'` tidak membutuhkan atau menyimpan password lokal di Moodle, serta mendukung **Single Logout per-browser** menggunakan parameter `sso_sid`, `client_secret`, dan `id_token_hint` agar satu akun tetap dapat aktif bersamaan di banyak browser tanpa saling memutus sesi.
 
 ## 5. Mengaktifkan & Menyesuaikan Response API Cekal Keuangan (Opsional)
 

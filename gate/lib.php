@@ -28,6 +28,7 @@ function auth_gate_check_sso_session(): void
 
     $ssoUserId    = (int) ($SESSION->sso_user_id ?? 0);
     $ssoLoginTime = (int) ($SESSION->sso_login_time ?? 0);
+    $ssoSid       = trim((string) ($SESSION->sso_sid ?? ''));
 
     if ($ssoUserId <= 0 || $ssoLoginTime <= 0) {
         return;
@@ -40,10 +41,11 @@ function auth_gate_check_sso_session(): void
 
     $SESSION->sso_last_check = time();
 
-    $sso_url = rtrim((string) ($CFG->sso_gate_url ?? ''), '/');
-    $app_key = $CFG->sso_gate_app_key ?? '';
+    $sso_url       = rtrim((string) ($CFG->sso_gate_url ?? ''), '/');
+    $app_key       = $CFG->sso_gate_app_key ?? '';
+    $client_secret = $CFG->sso_gate_secret ?? '';
 
-    if (empty($sso_url) || empty($app_key)) {
+    if (empty($sso_url) || empty($app_key) || empty($client_secret)) {
         return;
     }
 
@@ -53,19 +55,23 @@ function auth_gate_check_sso_session(): void
         $curl->setopt(array('CURLOPT_TIMEOUT' => 3));
 
         $response = $curl->post($sso_url . '/sso-check-session', array(
-            'app_key'        => $app_key,
-            'sso_user_id'    => $ssoUserId,
-            'sso_login_time' => $ssoLoginTime,
+            'app_key'           => $app_key,
+            'client_secret'     => $client_secret,
+            'user_id'           => $ssoUserId,
+            'client_login_time' => $ssoLoginTime,
+            'sid'               => $ssoSid,
         ));
-        $info = $curl->get_info();
+        $info     = $curl->get_info();
+        $httpCode = (int) ($info['http_code'] ?? 0);
 
-        if (($info['http_code'] ?? 0) == 200 && !empty($response)) {
+        if (($httpCode === 200 || $httpCode === 404) && !empty($response)) {
             $result = json_decode($response, true);
             if (isset($result['active']) && $result['active'] === false) {
                 unset(
                     $SESSION->sso_user_id,
                     $SESSION->sso_login_time,
                     $SESSION->sso_last_check,
+                    $SESSION->sso_sid,
                     $SESSION->oauth_id_token
                 );
                 require_logout();

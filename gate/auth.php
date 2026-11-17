@@ -147,6 +147,8 @@ class auth_plugin_gate extends auth_plugin_base
         $userData             = null;
         $sso_login_history_id = null;
         $oauth_id_token       = null;
+        $sso_sid              = null;
+        $sso_login_time       = time();
 
         // 2A. Mode 1: Standar OAuth 2.0 Authorization Code + PKCE (Shield JWT Addon)
         if (!empty($code)) {
@@ -182,6 +184,8 @@ class auth_plugin_gate extends auth_plugin_base
 
             $accessToken          = $tokenData['access_token'];
             $oauth_id_token       = $tokenData['id_token'] ?? null;
+            $sso_sid              = $tokenData['sso_sid'] ?? null;
+            $sso_login_time       = (int) ($tokenData['sso_login_time'] ?? time());
             $sso_login_history_id = $tokenData['sso_login_history_id'] ?? null;
 
             // Ambil profil user dari /oauth/userinfo menggunakan Shield JWT Bearer Token
@@ -202,6 +206,9 @@ class auth_plugin_gate extends auth_plugin_base
             }
 
             $userData = $userinfoData['data'];
+            if (empty($sso_sid) && !empty($userinfoData['sid'])) {
+                $sso_sid = (string) $userinfoData['sid'];
+            }
         } else {
             // 2B. Mode 2 (Fallback Legacy): Verifikasi Token Broker lama (/sso-verify)
             $options = array(
@@ -234,6 +241,9 @@ class auth_plugin_gate extends auth_plugin_base
             }
 
             $userData             = $responseData['data'];
+            $sso_sid              = $responseData['sso_sid'] ?? null;
+            $oauth_id_token       = $responseData['id_token'] ?? $oauth_id_token;
+            $sso_login_time       = (int) ($responseData['sso_login_time'] ?? time());
             $sso_login_history_id = $responseData['sso_login_history_id'] ?? null;
         }
 
@@ -259,8 +269,9 @@ class auth_plugin_gate extends auth_plugin_base
             if ($USER->username === $sso_username) {
                 // Simpan metadata sesi SSO untuk Single Logout (SLO)
                 $SESSION->sso_user_id    = (int) ($userData['id'] ?? $userData['sub'] ?? 0);
-                $SESSION->sso_login_time = time();
+                $SESSION->sso_login_time = $sso_login_time;
                 $SESSION->sso_last_check = time();
+                $SESSION->sso_sid        = $sso_sid;
                 $SESSION->oauth_id_token = $oauth_id_token;
                 // Akun sama, langsung masuk dashboard
                 redirect(new moodle_url('/my/'));
@@ -312,8 +323,9 @@ class auth_plugin_gate extends auth_plugin_base
 
         // Simpan metadata sesi SSO untuk Single Logout (SLO)
         $SESSION->sso_user_id    = (int) ($userData['id'] ?? $userData['sub'] ?? 0);
-        $SESSION->sso_login_time = time();
+        $SESSION->sso_login_time = $sso_login_time;
         $SESSION->sso_last_check = time();
+        $SESSION->sso_sid        = $sso_sid;
         $SESSION->oauth_id_token = $oauth_id_token;
 
         // Terapkan batasan concurrent login Moodle
@@ -331,12 +343,14 @@ class auth_plugin_gate extends auth_plugin_base
         global $CFG, $SESSION, $redirect;
 
         $ssoUserId = (int) ($SESSION->sso_user_id ?? 0);
+        $ssoSid    = trim((string) ($SESSION->sso_sid ?? ''));
         $idToken   = $SESSION->oauth_id_token ?? null;
 
         unset(
             $SESSION->sso_user_id,
             $SESSION->sso_login_time,
             $SESSION->sso_last_check,
+            $SESSION->sso_sid,
             $SESSION->oauth_id_token
         );
 
@@ -359,7 +373,8 @@ class auth_plugin_gate extends auth_plugin_base
             $curl->post($sso_url . '/sso-logout', array(
                 'app_key'       => $app_key,
                 'client_secret' => $client_secret,
-                'sso_user_id'   => $ssoUserId,
+                'user_id'       => $ssoUserId,
+                'sid'           => $ssoSid,
             ));
         } catch (\Throwable $e) {
             // Abaikan error jaringan pada back-channel
@@ -502,6 +517,35 @@ class auth_plugin_gate extends auth_plugin_base
 
         return false;
     }
+
+    /**
+     * Gate SSO adalah autentikasi eksternal (OAuth 2.0), sehingga Moodle tidak menyimpan/meminta password lokal.
+     */
+    public function is_internal()
+    {
+        return false;
+    }
+
+    public function prevent_local_passwords()
+    {
+        return true;
+    }
+
+    public function is_synchronised_with_external()
+    {
+        return false;
+    }
+
+    public function can_change_password()
+    {
+        return false;
+    }
+
+    public function can_reset_password()
+    {
+        return false;
+    }
+
     /**
      * Menonaktifkan validasi form manual karena plugin ini hanya untuk bypass SSO
      */
